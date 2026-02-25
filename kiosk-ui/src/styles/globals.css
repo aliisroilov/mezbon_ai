@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full w-full overflow-hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
+  }
+
+  body {
+    background: linear-gradient(135deg, #EEF0F7 0%, #F8FAFC 30%, #E8ECF5 60%, #F0F2FA 100%);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+  }
+
+  ::selection {
+    @apply bg-primary-light text-primary-dark;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-[3px] ring-primary/40 ring-offset-4;
+  }
+
+  /* Smooth thin scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-primary/20;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary/40;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Avatar animations */
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes checkmark-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes float-orb {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(30px, -25px); }
+  50% { transform: translate(-20px, 15px); }
+  75% { transform: translate(10px, -10px); }
+}
+
+@keyframes logo-glow {
+  0%, 100% {
+    box-shadow: 0 0 40px rgba(30, 42, 110, 0.15);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 60px rgba(30, 42, 110, 0.3);
+    transform: scale(1.04);
+  }
+}
+
+@keyframes pulse-text {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes bounce-gentle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(8px); }
+}
+
+/* Kiosk mode: hide cursor */
+html.kiosk-mode,
+html.kiosk-mode * {
+  cursor: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

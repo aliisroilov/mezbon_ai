@@ -1,0 +1,45 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: base
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/scripts:/app/scripts
+    environment:
+      - APP_ENV=development
+
+  kiosk-ui:
+    build:
+      context: ./kiosk-ui
+      dockerfile: Dockerfile
+      target: dev
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    volumes:
+      - ./kiosk-ui/src:/app/src
+      - ./kiosk-ui/public:/app/public
+      - ./kiosk-ui/index.html:/app/index.html
+      - ./kiosk-ui/vite.config.ts:/app/vite.config.ts
+      - ./kiosk-ui/tailwind.config.ts:/app/tailwind.config.ts
+      - ./kiosk-ui/tsconfig.json:/app/tsconfig.json
+    ports:
+      - "5173:5173"
+
+  admin-dashboard:
+    build:
+      context: ./admin-dashboard
+      dockerfile: Dockerfile
+      target: dev
+    command: npm run dev -- --host 0.0.0.0 --port 5174
+    volumes:
+      - ./admin-dashboard/src:/app/src
+      - ./admin-dashboard/public:/app/public
+      - ./admin-dashboard/index.html:/app/index.html
+      - ./admin-dashboard/vite.config.ts:/app/vite.config.ts
+      - ./admin-dashboard/tailwind.config.ts:/app/tailwind.config.ts
+      - ./admin-dashboard/tsconfig.json:/app/tsconfig.json
+    ports:
+      - "5174:5174"
