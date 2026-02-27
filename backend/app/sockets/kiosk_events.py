@@ -336,31 +336,17 @@ def register_kiosk_events(
             await orchestrator.session_mgr.touch(session_id)
 
             from app.ai.session_manager import SessionState
-            import asyncio
             current_state = SessionState(session["state"])
 
-            # Intent classification for early states
-            if current_state in (SessionState.GREETING, SessionState.INTENT_DISCOVERY):
-                try:
-                    intent = await asyncio.wait_for(
-                        orchestrator.gemini.classify_intent(text), timeout=5.0
-                    )
-                    from app.ai.orchestrator import _INTENT_TO_STATE
-                    target = _INTENT_TO_STATE.get(intent.intent)
-                    if target and await orchestrator.session_mgr.transition(
-                        session_id, SessionState.INTENT_DISCOVERY
-                    ):
-                        await orchestrator.session_mgr.transition(session_id, target)
-                except Exception as e:
-                    logger.debug("Intent-based state transition failed", extra={"error": str(e)})
+            # Intent is handled by Gemini via function calling — no separate classification needed
 
             # Chat with Gemini
             updated_state = await orchestrator.session_mgr.get_state(session_id) or current_state
             context = await orchestrator.session_mgr.get_context(session_id)
-            patient_context = orchestrator._build_patient_context(context)
+            patient_context = orchestrator._build_patient_context(context, state=updated_state.value)
 
-            state_hint = f"[CURRENT_STATE: {updated_state.value}]"
-            enriched = f"{state_hint} {text}"
+            # Clean message, no state injection
+            enriched = text
 
             async with orchestrator.db_factory() as db:
                 chat_response = await orchestrator.gemini.chat(

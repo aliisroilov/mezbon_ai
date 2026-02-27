@@ -5,31 +5,39 @@ from google.generativeai.types import FunctionDeclaration, Tool
 book_appointment = FunctionDeclaration(
     name="book_appointment",
     description=(
-        "Book a new appointment for a patient with a specific doctor and service. "
-        "Use this when a visitor wants to schedule a visit. Always confirm the details "
-        "with the visitor before calling this function."
+        "Book a new appointment for a patient. Use this when the visitor confirms they want to book. "
+        "You can pass either doctor_id (UUID) or doctor name — the system handles both. "
+        "IMPORTANT: Always confirm date, time, and doctor with the visitor before calling this."
     ),
     parameters={
         "type": "object",
         "properties": {
             "doctor_id": {
                 "type": "string",
-                "description": "UUID of the doctor to book with.",
+                "description": "Doctor UUID or name.",
             },
             "service_id": {
                 "type": "string",
-                "description": "UUID of the medical service requested.",
+                "description": "Service UUID (use department ID if unknown).",
             },
             "date": {
                 "type": "string",
-                "description": "Appointment date in YYYY-MM-DD format.",
+                "description": "Date in YYYY-MM-DD format.",
             },
             "time": {
                 "type": "string",
-                "description": "Appointment time in HH:MM format (24-hour).",
+                "description": "Time in HH:MM format (24-hour).",
+            },
+            "patient_name": {
+                "type": "string",
+                "description": "Patient's full name (if known).",
+            },
+            "patient_phone": {
+                "type": "string",
+                "description": "Patient's phone number (if known).",
             },
         },
-        "required": ["doctor_id", "service_id", "date", "time"],
+        "required": ["doctor_id", "date", "time"],
     },
 )
 
@@ -272,13 +280,10 @@ escalate_to_human = FunctionDeclaration(
 navigate_screen = FunctionDeclaration(
     name="navigate_screen",
     description=(
-        "Navigate the kiosk touchscreen to a specific UI screen. "
-        "IMPORTANT: Use this to visually show information on the kiosk screen. "
-        "For example, after getting department info, call navigate_screen('departments') "
-        "to show department cards on screen. After getting doctor info, call "
-        "navigate_screen('doctors') to show doctor selection cards. "
-        "Always call the relevant data function FIRST (get_department_info, "
-        "get_doctor_info, get_available_slots), THEN call navigate_screen."
+        "Navigate the kiosk touchscreen to show a specific UI screen to the visitor. "
+        "ALWAYS call this after fetching data (e.g., after get_department_info, call navigate_screen('departments')). "
+        "When you call navigate_screen, keep your text response very short (1 sentence) — the screen will show the details. "
+        "Available screens: departments, doctors, timeslots, booking_confirm, checkin, payment, queue_ticket, info, faq, farewell."
     ),
     parameters={
         "type": "object",

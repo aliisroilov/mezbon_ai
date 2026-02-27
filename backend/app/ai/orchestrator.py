@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from typing import Any
@@ -207,40 +206,16 @@ class Orchestrator:
 
         current_state = SessionState(session["state"])
 
-        # 2. Intent classification if in early states (fail-fast: 5s max)
-        t_intent = time.monotonic()
-        if current_state in (
-            SessionState.GREETING,
-            SessionState.INTENT_DISCOVERY,
-        ):
-            try:
-                intent = await asyncio.wait_for(
-                    self.gemini.classify_intent(transcript),
-                    timeout=5.0,
-                )
-                target = _INTENT_TO_STATE.get(intent.intent)
-                if target and await self.session_mgr.transition(session_id, SessionState.INTENT_DISCOVERY):
-                    await self.session_mgr.transition(session_id, target)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Intent classification timed out (5s), skipping",
-                    extra={"session_id": session_id},
-                )
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "Intent classification failed, continuing to chat",
-                    extra={"session_id": session_id},
-                )
-        intent_ms = (time.monotonic() - t_intent) * 1000
+        # Intent is handled by Gemini via function calling — no separate classification needed
+        intent_ms = 0
 
-        # 3. Chat with Gemini — include current state so it knows what to do
+        # 3. Chat with Gemini — state is passed via patient_context into system prompt
         updated_state = await self.session_mgr.get_state(session_id) or current_state
         context = await self.session_mgr.get_context(session_id)
-        patient_context = self._build_patient_context(context)
+        patient_context = self._build_patient_context(context, state=updated_state.value)
 
-        # Prepend state context so Gemini can decide which functions to call
-        state_hint = f"[CURRENT_STATE: {updated_state.value}]"
-        enriched_message = f"{state_hint} {transcript}"
+        # Clean user message, no state injection
+        enriched_message = transcript
 
         t_llm = time.monotonic()
         try:
@@ -361,9 +336,12 @@ class Orchestrator:
             await self.session_mgr.transition(session_id, SessionState.INTENT_DISCOVERY)
 
         # Build a natural-language response via Gemini
+        current_state = SessionState(
+            (await self.session_mgr.get_session(session_id) or session).get("state", "IDLE")
+        )
         message = f"[USER_ACTION: {action}] {json.dumps(data)}" if data else f"[USER_ACTION: {action}]"
         context = await self.session_mgr.get_context(session_id)
-        patient_context = self._build_patient_context(context)
+        patient_context = self._build_patient_context(context, state=current_state.value)
 
         async with self.db_factory() as db:
             chat_response = await self.gemini.chat(
@@ -506,6 +484,23 @@ class Orchestrator:
             if await self.session_mgr.transition(session_id, target):
                 return True
 
+        # Last resort: force direct transition to prevent dead-ends
+        # This handles cases where the state machine is too rigid
+        logger.warning(
+            "Force-transitioning (rigid state machine bypass)",
+            extra={"session_id": session_id, "target": target.value},
+        )
+        session = await self.session_mgr.get_session(session_id)
+        if session:
+            session["state"] = target.value
+            import json as _json
+            await self.session_mgr.redis.set(
+                f"session:{session_id}",
+                _json.dumps(session),
+                ex=900,
+            )
+            return True
+
         return False
 
     async def _gemini_greeting(
@@ -578,20 +573,23 @@ class Orchestrator:
         return None
 
     @staticmethod
-    def _build_patient_context(context: dict[str, Any]) -> dict[str, Any] | None:
+    def _build_patient_context(context: dict[str, Any], state: str = "") -> dict[str, Any] | None:
         """Build patient context dict from session context.
 
         Keys must match what GeminiService.chat() expects:
         ``full_name``, ``id``, ``language_preference``.
         """
         patient_id = context.get("patient_id")
-        if not patient_id:
-            return None
-        return {
-            "id": patient_id,
-            "full_name": context.get("patient_name", ""),
-            "language_preference": context.get("language", "uz"),
-        }
+        result: dict[str, Any] = {}
+        if patient_id:
+            result = {
+                "id": patient_id,
+                "full_name": context.get("patient_name", ""),
+                "language_preference": context.get("language", "uz"),
+            }
+        if state:
+            result["current_state"] = state
+        return result if result else None
 
     @staticmethod
     def _patient_from_context(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -691,31 +689,31 @@ class Orchestrator:
 # ------------------------------------------------------------------
 
 _EMPTY_STT_TEXTS: dict[str, str] = {
-    "uz": "Kechirasiz, eshitmadim. Iltimos, qaytadan ayting yoki ekrandagi tugmalardan foydalaning.",
-    "ru": "Извините, не расслышал. Пожалуйста, повторите или используйте кнопки на экране.",
-    "en": "Sorry, I didn't catch that. Please repeat or use the buttons on screen.",
+    "uz": "Eshitmadim, iltimos qaytadan ayting. Yoki ekrandagi tugmalardan foydalanishingiz mumkin.",
+    "ru": "Не расслышала, повторите, пожалуйста. Или можете использовать кнопки на экране.",
+    "en": "I didn't catch that, could you please repeat? You can also use the buttons on screen.",
 }
 
 _EMPTY_STT_TEXTS_2: dict[str, str] = {
-    "uz": "Ovozingiz eshitilmayapti. Ekrandagi tugmalardan foydalaning.",
-    "ru": "Вас не слышно. Используйте кнопки на экране.",
-    "en": "I can't hear you. Please use the buttons on screen.",
+    "uz": "Ovozingiz yetib kelmayapti. Ekrandagi tugmalardan foydalaning — men yordam beraman!",
+    "ru": "Не слышу вас. Используйте кнопки на экране — я помогу!",
+    "en": "I can't hear you well. Please use the buttons on screen — I'm here to help!",
 }
 
 _FALLBACK_TEXTS: dict[str, str] = {
     "uz": "Sizga qanday yordam bera olaman? Gapiring yoki ekrandagi tugmalardan foydalaning.",
     "ru": "Чем могу помочь? Говорите или используйте кнопки на экране.",
-    "en": "How can I help you? Speak or use the buttons on the screen.",
+    "en": "How can I help you? Please speak or use the buttons on screen.",
 }
 
 _TIMEOUT_TEXTS: dict[str, str] = {
-    "uz": "Hali bu yerdasizmi? Sizga yana yordam bera olamanmi?",
-    "ru": "Вы ещё здесь? Могу ли я чем-то ещё помочь?",
-    "en": "Are you still there? Can I help you with anything else?",
+    "uz": "Hali shu yerdamisiz? Yana biror narsa bilan yordam kerakmi?",
+    "ru": "Вы ещё здесь? Нужна ещё какая-нибудь помощь?",
+    "en": "Are you still there? Need any more help?",
 }
 
 _FAREWELL_TEXTS: dict[str, str] = {
-    "uz": "Rahmat, yaxshi kun tilayman! Yana kelib turing.",
-    "ru": "Спасибо, хорошего дня! Приходите ещё.",
-    "en": "Thank you, have a great day! Come back anytime.",
+    "uz": "Rahmat, yaxshi kun tilayman! Sog'liq bo'lsin!",
+    "ru": "Спасибо, хорошего дня! Будьте здоровы!",
+    "en": "Thank you, have a wonderful day! Take care!",
 }

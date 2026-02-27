@@ -87,9 +87,9 @@ class GeminiService:
             system_instruction=system_prompt,
             tools=[CLINIC_TOOLS],
             generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                top_p=0.85,
-                max_output_tokens=150,  # Short responses — 1-2 sentences max
+                temperature=0.65,       # Warmer, more natural responses
+                top_p=0.9,              # Allow more diverse vocabulary
+                max_output_tokens=300,  # Enough for 1-3 natural sentences
             ),
         )
 
@@ -148,10 +148,10 @@ class GeminiService:
         start_ts = time.monotonic()
 
         # Load conversation history (Redis or in-memory fallback)
-        # Trim to last 10 entries (5 pairs) for speed — long history = slow
+        # Trim to last 20 entries (10 pairs) — short history makes Gemini forget mid-conversation
         history = await self._load_history(session_id)
-        if len(history) > 10:
-            history = history[-10:]
+        if len(history) > 20:
+            history = history[-20:]
 
         # Build the user message with patient context
         user_msg = message
@@ -349,54 +349,45 @@ class GeminiService:
     def _sanitise_text(text: str) -> str:
         """Ensure response is natural language, not JSON/code.
 
-        If Gemini returned JSON, attempt to extract a meaningful text
-        field from it before falling back to a generic prompt.
+        Less aggressive than before — only strips actual JSON objects,
+        code blocks, and state tags. Preserves quoted strings and short text.
         """
         if not text:
             return ""
 
         cleaned = text.strip()
 
-        # Strip [CURRENT_STATE: ...] tags that Gemini sometimes echoes back
+        # Strip state tags that Gemini echoes back
         cleaned = re.sub(r'\[CURRENT_STATE:\s*[^\]]*\]\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\[USER_ACTION:\s*[^\]]*\]\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\[SYSTEM:\s*[^\]]*\]\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\[Context:\s*[^\]]*\]\s*', '', cleaned).strip()
 
-        # Strip markdown code fences that Gemini sometimes wraps responses in
+        # Strip markdown code fences
         if cleaned.startswith("```") and cleaned.endswith("```"):
             cleaned = cleaned.strip("`").strip()
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:].strip()
 
-        # Check if it looks like a JSON object or array (NOT a quoted string)
-        # Gemini sometimes wraps text in quotes — that IS valid natural language.
+        # Only strip if it's a pure JSON object/array (starts AND ends with braces)
         if cleaned.startswith(("{", "[")) and cleaned.endswith(("}", "]")):
             try:
                 parsed = json.loads(cleaned)
-                logger.warning(
-                    "Gemini returned JSON instead of natural language",
-                    extra={"raw_text": cleaned[:200]},
-                )
-                # Try to extract a text/message field from the JSON
                 if isinstance(parsed, dict):
-                    for key in ("text", "message", "response", "reply", "answer"):
+                    for key in ("text", "message", "response", "reply", "answer", "javob"):
                         val = parsed.get(key)
-                        if val and isinstance(val, str) and len(val) > 5:
+                        if val and isinstance(val, str) and len(val) > 3:
                             return val
-                # Couldn't extract — return empty so orchestrator uses its own fallback
                 return ""
             except (json.JSONDecodeError, ValueError):
-                pass  # Not valid JSON, probably fine
+                pass  # Not JSON, keep as-is
 
-        # If the text is wrapped in quotes, strip them (Gemini sometimes does this)
-        if cleaned.startswith('"') and cleaned.endswith('"') and len(cleaned) > 2:
+        # Strip surrounding quotes (but not internal quotes)
+        if cleaned.startswith('"') and cleaned.endswith('"') and cleaned.count('"') == 2:
             cleaned = cleaned[1:-1]
 
-        # Check for code-like patterns (Gemini sometimes hallucinates code)
-        code_markers = ("```", "print(", "default_api.", "import ", "def ", "function ")
-        if any(cleaned.startswith(m) for m in code_markers):
-            logger.warning(
-                "Gemini returned code/structured data",
-                extra={"raw_text": cleaned[:200]},
-            )
+        # Only strip code if it truly starts with code markers
+        if cleaned.startswith(("```", "import ", "def ", "class ", "function ")):
             return ""
 
         return cleaned
@@ -672,17 +663,29 @@ class GeminiService:
     def _deserialise_history(entries: list[dict]) -> list:
         """Convert stored dicts back to Gemini Content format.
 
-        Only includes text parts — function_call/function_response parts
-        cannot be reliably reconstructed and Gemini rejects Content with
-        incompatible parts.
+        Includes text summaries of function calls so Gemini remembers
+        what actions it already took.
         """
         history = []
         for entry in entries:
-            text_parts = [
-                genai.protos.Part(text=p["text"])
-                for p in entry.get("parts", [])
-                if "text" in p and p["text"]
-            ]
+            text_parts = []
+            for p in entry.get("parts", []):
+                if "text" in p and p["text"]:
+                    text_parts.append(genai.protos.Part(text=p["text"]))
+                elif "function_call" in p:
+                    # Preserve function call as text summary so Gemini remembers
+                    fc = p["function_call"]
+                    args_str = ", ".join(
+                        f"{k}={v}" for k, v in fc.get("args", {}).items()
+                    )
+                    summary = f"[Called {fc['name']}({args_str})]"
+                    text_parts.append(genai.protos.Part(text=summary))
+                elif "function_response" in p:
+                    # Preserve function response as brief note
+                    fr = p["function_response"]
+                    text_parts.append(
+                        genai.protos.Part(text=f"[{fr['name']} completed]")
+                    )
             if text_parts:
                 # Avoid consecutive same-role entries (Gemini rejects them)
                 if history and history[-1].role == entry["role"]:
