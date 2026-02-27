@@ -5,9 +5,9 @@ from google.generativeai.types import FunctionDeclaration, Tool
 book_appointment = FunctionDeclaration(
     name="book_appointment",
     description=(
-        "Book a new appointment for a patient. Use this when the visitor confirms they want to book. "
-        "You can pass either doctor_id (UUID) or doctor name — the system handles both. "
-        "IMPORTANT: Always confirm date, time, and doctor with the visitor before calling this."
+        "Book an appointment. Call this ONLY after confirming ALL details with the patient: "
+        "doctor, date, time, and patient name. You can pass doctor_id (UUID) or doctor name. "
+        "After booking, tell the patient their confirmation code and appointment details."
     ),
     parameters={
         "type": "object",
@@ -65,8 +65,8 @@ check_in = FunctionDeclaration(
 lookup_patient = FunctionDeclaration(
     name="lookup_patient",
     description=(
-        "Look up an existing patient by their phone number. "
-        "Use this to find a patient's record before booking or checking in."
+        "Look up a patient by phone number. The system normalizes the number automatically — "
+        "pass whatever format the patient gave you. Do NOT ask the patient to correct their phone format."
     ),
     parameters={
         "type": "object",
@@ -83,8 +83,8 @@ lookup_patient = FunctionDeclaration(
 register_patient = FunctionDeclaration(
     name="register_patient",
     description=(
-        "Register a new patient in the system. Use this when the visitor is not "
-        "found in the database and needs to be registered before booking."
+        "Register a new patient. Call this when lookup_patient returns not found. "
+        "You need at minimum: name and phone. Date of birth and language are optional."
     ),
     parameters={
         "type": "object",
@@ -114,8 +114,9 @@ register_patient = FunctionDeclaration(
 get_available_slots = FunctionDeclaration(
     name="get_available_slots",
     description=(
-        "Get available appointment time slots for a specific doctor on a given date. "
-        "Use this to show the visitor when the doctor is free."
+        "Get available appointment slots for a doctor on a date. Call this AFTER "
+        "the patient has chosen a doctor AND a date. Tell the patient the available "
+        "times and ask which one they prefer."
     ),
     parameters={
         "type": "object",
@@ -136,8 +137,10 @@ get_available_slots = FunctionDeclaration(
 get_department_info = FunctionDeclaration(
     name="get_department_info",
     description=(
-        "Get information about a clinic department including its doctors and services. "
-        "Use this when a visitor asks about a specific department or medical field."
+        "Get department info including its doctors. Call this FIRST when a patient "
+        "wants to book an appointment or asks about a department. The result includes "
+        "the department's doctors so you can offer them to the patient. "
+        "After getting results, tell the patient about the available doctors."
     ),
     parameters={
         "type": "object",
@@ -172,32 +175,33 @@ get_doctor_info = FunctionDeclaration(
     },
 )
 
-process_payment = FunctionDeclaration(
-    name="process_payment",
-    description=(
-        "Initiate a payment for a patient. Use this when the visitor wants to pay "
-        "for a service or appointment. Always confirm the amount before processing."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "patient_id": {
-                "type": "string",
-                "description": "UUID of the patient making the payment.",
-            },
-            "amount": {
-                "type": "number",
-                "description": "Payment amount in UZS (Uzbek so'm).",
-            },
-            "method": {
-                "type": "string",
-                "description": "Payment method.",
-                "enum": ["uzcard", "humo", "click", "payme", "cash"],
-            },
-        },
-        "required": ["patient_id", "amount", "method"],
-    },
-)
+# DISABLED: Payment not ready for pilot
+# process_payment = FunctionDeclaration(
+#     name="process_payment",
+#     description=(
+#         "Initiate a payment for a patient. Use this when the visitor wants to pay "
+#         "for a service or appointment. Always confirm the amount before processing."
+#     ),
+#     parameters={
+#         "type": "object",
+#         "properties": {
+#             "patient_id": {
+#                 "type": "string",
+#                 "description": "UUID of the patient making the payment.",
+#             },
+#             "amount": {
+#                 "type": "number",
+#                 "description": "Payment amount in UZS (Uzbek so'm).",
+#             },
+#             "method": {
+#                 "type": "string",
+#                 "description": "Payment method.",
+#                 "enum": ["uzcard", "humo", "click", "payme", "cash"],
+#             },
+#         },
+#         "required": ["patient_id", "amount", "method"],
+#     },
+# )
 
 get_queue_status = FunctionDeclaration(
     name="get_queue_status",
@@ -220,8 +224,8 @@ get_queue_status = FunctionDeclaration(
 issue_queue_ticket = FunctionDeclaration(
     name="issue_queue_ticket",
     description=(
-        "Issue a queue ticket for a patient in a specific department. "
-        "Use this after check-in or when a patient needs to wait for their turn."
+        "Issue a queue ticket after booking or check-in. Tell the patient their "
+        "ticket number and estimated wait time."
     ),
     parameters={
         "type": "object",
@@ -277,38 +281,6 @@ escalate_to_human = FunctionDeclaration(
     },
 )
 
-navigate_screen = FunctionDeclaration(
-    name="navigate_screen",
-    description=(
-        "Navigate the kiosk touchscreen to show a specific UI screen to the visitor. "
-        "ALWAYS call this after fetching data (e.g., after get_department_info, call navigate_screen('departments')). "
-        "When you call navigate_screen, keep your text response very short (1 sentence) — the screen will show the details. "
-        "Available screens: departments, doctors, timeslots, booking_confirm, checkin, payment, queue_ticket, info, faq, farewell."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "screen": {
-                "type": "string",
-                "description": "Target screen to navigate to.",
-                "enum": [
-                    "departments",
-                    "doctors",
-                    "timeslots",
-                    "booking_confirm",
-                    "checkin",
-                    "payment",
-                    "queue_ticket",
-                    "info",
-                    "faq",
-                    "farewell",
-                ],
-            },
-        },
-        "required": ["screen"],
-    },
-)
-
 FUNCTION_DECLARATIONS = [
     book_appointment,
     check_in,
@@ -317,12 +289,12 @@ FUNCTION_DECLARATIONS = [
     get_available_slots,
     get_department_info,
     get_doctor_info,
-    process_payment,
+    # process_payment,  # DISABLED: Payment not ready for pilot
     get_queue_status,
     issue_queue_ticket,
     search_faq,
     escalate_to_human,
-    navigate_screen,
+    # navigate_screen REMOVED — UI navigation auto-derived from data functions
 ]
 
 CLINIC_TOOLS = Tool(function_declarations=FUNCTION_DECLARATIONS)

@@ -114,7 +114,9 @@
     "failed": "To'lov amalga oshmadi",
     "retry": "Qayta urinish",
     "otherMethod": "Boshqa usul",
-    "receipt": "Chek"
+    "receipt": "Chek",
+    "cashierTitle": "Kassada to'lang",
+    "cashierDesc": "To'lov faqat kassada qabul qilinadi. Iltimos, kassaga murojaat qiling."
   },
   "queue": {
     "title": "Navbat",

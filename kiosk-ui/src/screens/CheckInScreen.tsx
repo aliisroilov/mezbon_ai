@@ -5,7 +5,6 @@ import {
   Calendar,
   Clock,
   Stethoscope,
-  Delete,
 } from "lucide-react";
 import { AIPromptBar } from "../components/ai/AIPromptBar";
 import { SuccessAnimation } from "../components/feedback/SuccessAnimation";
@@ -14,81 +13,10 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { HeaderBar } from "../components/layout/HeaderBar";
 import { BottomNav } from "../components/layout/BottomNav";
+import { PhoneInput } from "../components/input/PhoneInput";
 import { useSessionStore } from "../store/sessionStore";
 import { useVoiceChat } from "../hooks/useVoiceChat";
-import { cn } from "../lib/cn";
 import { sounds } from "../utils/sounds";
-
-// ── NumPad ──────────────────────────────────────────────────
-
-interface NumPadProps {
-  onDigit: (digit: string) => void;
-  onBackspace: () => void;
-  onClear: () => void;
-}
-
-function NumPad({ onDigit, onBackspace, onClear }: NumPadProps) {
-  const keys = [
-    ["1", "2", "3"],
-    ["4", "5", "6"],
-    ["7", "8", "9"],
-    ["C", "0", "⌫"],
-  ];
-
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      {keys.flat().map((key) => {
-        const isAction = key === "C" || key === "⌫";
-        return (
-          <motion.button
-            key={key}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => {
-              if (key === "⌫") onBackspace();
-              else if (key === "C") onClear();
-              else onDigit(key);
-            }}
-            className={cn(
-              "flex h-[72px] items-center justify-center rounded-2xl text-[28px] font-semibold transition-all duration-150",
-              isAction
-                ? key === "C"
-                  ? "bg-red-50 text-danger"
-                  : "bg-slate-100 text-text-body"
-                : "bg-white text-text-primary shadow-card hover:shadow-card-hover active:bg-primary-50",
-            )}
-          >
-            {key === "⌫" ? <Delete className="h-6 w-6" /> : key}
-          </motion.button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Phone display ───────────────────────────────────────────
-
-function PhoneDisplay({ value }: { value: string }) {
-  const formatted = useMemo(() => {
-    const digits = value.replace(/\D/g, "");
-    const parts: string[] = [];
-    if (digits.length > 0) parts.push(digits.slice(0, 2));
-    if (digits.length > 2) parts.push(digits.slice(2, 5));
-    if (digits.length > 5) parts.push(digits.slice(5, 7));
-    if (digits.length > 7) parts.push(digits.slice(7, 9));
-    return parts.join(" ");
-  }, [value]);
-
-  return (
-    <div className="flex h-touch-lg items-center justify-center rounded-card border border-border bg-white px-6">
-      <span className="mr-3 text-h2 text-text-muted">+998</span>
-      <span className="text-[40px] font-bold tracking-wider text-text-primary">
-        {formatted || (
-          <span className="text-text-muted">__ ___ __ __</span>
-        )}
-      </span>
-    </div>
-  );
-}
 
 // ── Appointment card ────────────────────────────────────────
 
@@ -318,9 +246,11 @@ export function CheckInScreen({
               {/* Mode B: Not recognized — phone input */}
               {!isRecognized && !checkedIn && (
                 <div className="flex flex-col gap-5">
-                  <PhoneDisplay value={phone} />
+                  {!lookingUp && !notFound && (
+                    <PhoneInput value={phone} onChange={handlePhoneChange} />
+                  )}
 
-                  {lookingUp ? (
+                  {lookingUp && (
                     <motion.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
@@ -331,7 +261,9 @@ export function CheckInScreen({
                         {t("loading.checkIn")}
                       </p>
                     </motion.div>
-                  ) : notFound ? (
+                  )}
+
+                  {notFound && (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -348,16 +280,6 @@ export function CheckInScreen({
                         {t("intent.bookAppointment")}
                       </Button>
                     </motion.div>
-                  ) : (
-                    <NumPad
-                      onDigit={(d) => {
-                        if (phone.length < 9) handlePhoneChange(phone + d);
-                      }}
-                      onBackspace={() =>
-                        handlePhoneChange(phone.slice(0, -1))
-                      }
-                      onClear={() => handlePhoneChange("")}
-                    />
                   )}
 
                   {/* If phone lookup found appointment, show it */}

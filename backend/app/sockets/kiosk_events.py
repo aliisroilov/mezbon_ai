@@ -343,7 +343,9 @@ def register_kiosk_events(
             # Chat with Gemini
             updated_state = await orchestrator.session_mgr.get_state(session_id) or current_state
             context = await orchestrator.session_mgr.get_context(session_id)
-            patient_context = orchestrator._build_patient_context(context, state=updated_state.value)
+            # Get session language (set by kiosk UI language switch)
+            session_language = language or session.get("language", "uz")
+            patient_context = orchestrator._build_patient_context(context, state=updated_state.value, language=session_language)
 
             # Clean message, no state injection
             enriched = text
@@ -355,6 +357,7 @@ def register_kiosk_events(
                     patient_context=patient_context,
                     clinic_id=clinic_id,
                     db=db,
+                    language=session_language,
                 )
 
             response_text = orchestrator._sanitise_response_text(

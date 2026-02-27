@@ -8,111 +8,21 @@ import {
   Timer,
   Banknote,
   Camera,
-  Delete,
 } from "lucide-react";
 import { AIPromptBar } from "../components/ai/AIPromptBar";
 import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
 import { Divider } from "../components/ui/Divider";
 import { HeaderBar } from "../components/layout/HeaderBar";
 import { BottomNav } from "../components/layout/BottomNav";
 import { SuccessAnimation } from "../components/feedback/SuccessAnimation";
 import { ConfettiEffect } from "../components/feedback/ConfettiEffect";
+import { CustomKeyboard } from "../components/input/CustomKeyboard";
+import { PhoneInput } from "../components/input/PhoneInput";
+import { DatePicker } from "../components/input/DatePicker";
 import { useSessionStore } from "../store/sessionStore";
 import { useVoiceChat } from "../hooks/useVoiceChat";
 import { cn } from "../lib/cn";
 import { sounds } from "../utils/sounds";
-
-// ── NumPad ──────────────────────────────────────────────────
-
-interface NumPadProps {
-  onDigit: (digit: string) => void;
-  onBackspace: () => void;
-  onClear: () => void;
-}
-
-function NumPad({ onDigit, onBackspace, onClear }: NumPadProps) {
-  const keys = [
-    ["1", "2", "3"],
-    ["4", "5", "6"],
-    ["7", "8", "9"],
-    ["C", "0", "⌫"],
-  ];
-
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      {keys.flat().map((key) => {
-        const isAction = key === "C" || key === "⌫";
-        return (
-          <motion.button
-            key={key}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => {
-              if (key === "⌫") onBackspace();
-              else if (key === "C") onClear();
-              else onDigit(key);
-            }}
-            className={cn(
-              "flex h-[72px] items-center justify-center rounded-2xl text-[28px] font-semibold transition-all duration-150",
-              isAction
-                ? key === "C"
-                  ? "bg-red-50 text-danger"
-                  : "bg-slate-100 text-text-body"
-                : "bg-white text-text-primary shadow-card hover:shadow-card-hover",
-            )}
-          >
-            {key === "⌫" ? <Delete className="h-6 w-6" /> : key}
-          </motion.button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Phone input with prefix ─────────────────────────────────
-
-interface PhoneInputProps {
-  value: string;
-  onChange: (val: string) => void;
-}
-
-function PhoneInput({ value, onChange }: PhoneInputProps) {
-  const { t } = useTranslation();
-
-  const formatted = useMemo(() => {
-    // Format: XX XXX XX XX
-    const digits = value.replace(/\D/g, "");
-    const parts: string[] = [];
-    if (digits.length > 0) parts.push(digits.slice(0, 2));
-    if (digits.length > 2) parts.push(digits.slice(2, 5));
-    if (digits.length > 5) parts.push(digits.slice(5, 7));
-    if (digits.length > 7) parts.push(digits.slice(7, 9));
-    return parts.join(" ");
-  }, [value]);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <label className="text-caption font-semibold text-text-body">
-        {t("common.phone")}
-      </label>
-      <div className="flex h-touch-md items-center rounded-input border border-border bg-white px-4">
-        <span className="mr-3 text-body text-text-muted">+998</span>
-        <span className="text-[24px] font-semibold tracking-wider text-text-primary">
-          {formatted || (
-            <span className="text-text-muted">__ ___ __ __</span>
-          )}
-        </span>
-      </div>
-      <NumPad
-        onDigit={(d) => {
-          if (value.length < 9) onChange(value + d);
-        }}
-        onBackspace={() => onChange(value.slice(0, -1))}
-        onClear={() => onChange("")}
-      />
-    </div>
-  );
-}
 
 // ── Registration form ───────────────────────────────────────
 
@@ -141,21 +51,19 @@ function RegistrationForm({ onSubmit }: RegistrationFormProps) {
       </h2>
 
       <div className="flex flex-col gap-5">
-        <Input
+        <CustomKeyboard
           label={t("common.name")}
           placeholder={t("booking.namePlaceholder")}
           value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
+          onChange={setName}
         />
 
         <PhoneInput value={phone} onChange={setPhone} />
 
-        <Input
+        <DatePicker
           label={t("booking.dateOfBirth")}
-          type="date"
           value={dob}
-          onChange={(e) => setDob(e.target.value)}
+          onChange={setDob}
         />
       </div>
 
@@ -441,6 +349,11 @@ export function BookingConfirmScreen({
                       label={t("booking.price")}
                       value={priceFormatted}
                     />
+                    <div className="rounded-xl bg-amber-50 px-4 py-3 text-center">
+                      <p className="text-body font-semibold text-amber-800">
+                        {t("payment.cashierTitle")} | {t("payment.cashNote")}
+                      </p>
+                    </div>
                   </>
                 )}
               </div>

@@ -9,7 +9,7 @@ import { TimeSlotScreen } from "../screens/TimeSlotScreen";
 import { BookingConfirmScreen } from "../screens/BookingConfirmScreen";
 import { CheckInScreen } from "../screens/CheckInScreen";
 import { QueueTicketScreen } from "../screens/QueueTicketScreen";
-import { PaymentScreen } from "../screens/PaymentScreen";
+import { CashierPaymentScreen } from "../screens/CashierPaymentScreen";
 import { InfoScreen } from "../screens/InfoScreen";
 import { FarewellScreen } from "../screens/FarewellScreen";
 import { HandOffScreen } from "../screens/HandOffScreen";
@@ -28,7 +28,7 @@ type ScreenKey =
   | "confirm"
   | "checkin"
   | "queue"
-  | "payment"
+  | "cashier-payment"
   | "info"
   | "farewell"
   | "handoff";
@@ -41,7 +41,7 @@ const SCREEN_ORDER: ScreenKey[] = [
   "doctor",
   "timeslot",
   "confirm",
-  "payment",
+  "cashier-payment",
   "queue",
   "checkin",
   "info",
@@ -72,7 +72,7 @@ function getScreenKey(state: VisitorState): ScreenKey {
     case "SELECT_PAYMENT_METHOD":
     case "PROCESS_PAYMENT":
     case "PAYMENT_RECEIPT":
-      return "payment";
+      return "cashier-payment";
     case "BOOKING_COMPLETE":
     case "ISSUE_QUEUE_TICKET":
     case "ROUTE_TO_DEPARTMENT":
@@ -224,9 +224,9 @@ export function ScreenRouter() {
         {screenKey === "queue" && (
           <QueueTicketScreen onDone={handlers.handleQueueDone} />
         )}
-        {screenKey === "payment" && (
-          <PaymentScreen
-            onSuccess={handlers.handlePaymentSuccess}
+        {screenKey === "cashier-payment" && (
+          <CashierPaymentScreen
+            onDone={handlers.handlePaymentSuccess}
             onBack={handlers.handlePaymentBack}
           />
         )}

@@ -212,7 +212,8 @@ class Orchestrator:
         # 3. Chat with Gemini — state is passed via patient_context into system prompt
         updated_state = await self.session_mgr.get_state(session_id) or current_state
         context = await self.session_mgr.get_context(session_id)
-        patient_context = self._build_patient_context(context, state=updated_state.value)
+        session_language = session.get("language", "uz")
+        patient_context = self._build_patient_context(context, state=updated_state.value, language=session_language)
 
         # Clean user message, no state injection
         enriched_message = transcript
@@ -226,6 +227,7 @@ class Orchestrator:
                     patient_context=patient_context,
                     clinic_id=clinic_id,
                     db=db,
+                    language=session_language,
                 )
         except Exception as exc:
             logger.opt(exception=True).error(
@@ -341,7 +343,7 @@ class Orchestrator:
         )
         message = f"[USER_ACTION: {action}] {json.dumps(data)}" if data else f"[USER_ACTION: {action}]"
         context = await self.session_mgr.get_context(session_id)
-        patient_context = self._build_patient_context(context, state=current_state.value)
+        patient_context = self._build_patient_context(context, state=current_state.value, language=language)
 
         async with self.db_factory() as db:
             chat_response = await self.gemini.chat(
@@ -350,6 +352,7 @@ class Orchestrator:
                 patient_context=patient_context,
                 clinic_id=clinic_id,
                 db=db,
+                language=language,
             )
 
         final_state = await self.session_mgr.get_state(session_id) or current_state
@@ -510,6 +513,9 @@ class Orchestrator:
         patient_data: dict[str, Any] | None = None,
     ) -> str:
         """Ask Gemini to generate a greeting."""
+        session = await self.session_mgr.get_session(session_id)
+        session_language = session.get("language", "uz") if session else "uz"
+
         if patient_data:
             name = patient_data.get("full_name", "")
             message = f"[SYSTEM: Returning patient detected. Name: {name}. Generate a warm personalized greeting.]"
@@ -525,6 +531,7 @@ class Orchestrator:
                 patient_context=patient_context,
                 clinic_id=clinic_id,
                 db=db,
+                language=session_language,
             )
         return response.text
 
@@ -573,11 +580,13 @@ class Orchestrator:
         return None
 
     @staticmethod
-    def _build_patient_context(context: dict[str, Any], state: str = "") -> dict[str, Any] | None:
+    def _build_patient_context(context: dict[str, Any], state: str = "", language: str = "uz") -> dict[str, Any] | None:
         """Build patient context dict from session context.
 
-        Keys must match what GeminiService.chat() expects:
-        ``full_name``, ``id``, ``language_preference``.
+        Args:
+            context: Session context dict (session["context"]).
+            state: Current session state string.
+            language: Session language from session["language"] — NOT from context.
         """
         patient_id = context.get("patient_id")
         result: dict[str, Any] = {}
@@ -585,7 +594,7 @@ class Orchestrator:
             result = {
                 "id": patient_id,
                 "full_name": context.get("patient_name", ""),
-                "language_preference": context.get("language", "uz"),
+                "language_preference": language,
             }
         if state:
             result["current_state"] = state

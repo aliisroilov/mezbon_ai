@@ -87,9 +87,10 @@ class GeminiService:
             system_instruction=system_prompt,
             tools=[CLINIC_TOOLS],
             generation_config=genai.GenerationConfig(
-                temperature=0.65,       # Warmer, more natural responses
-                top_p=0.9,              # Allow more diverse vocabulary
-                max_output_tokens=300,  # Enough for 1-3 natural sentences
+                temperature=0.8,        # Warmer for natural, human-like conversation
+                top_p=0.9,              # More diverse word choices
+                top_k=40,               # Broader vocabulary selection
+                max_output_tokens=200,  # Shorter = faster + more natural for kiosk
             ),
         )
 
@@ -126,6 +127,7 @@ class GeminiService:
         patient_context: dict | None = None,
         clinic_id: uuid.UUID | None = None,
         db: Any | None = None,
+        language: str = "uz",
     ) -> ChatResponse:
         """Main conversation method with function-call handling.
 
@@ -148,23 +150,52 @@ class GeminiService:
         start_ts = time.monotonic()
 
         # Load conversation history (Redis or in-memory fallback)
-        # Trim to last 20 entries (10 pairs) — short history makes Gemini forget mid-conversation
+        # Trim to last 12 entries (6 turns) — faster Gemini responses, enough for booking flow
         history = await self._load_history(session_id)
-        if len(history) > 20:
-            history = history[-20:]
+        if len(history) > 12:
+            history = history[-12:]
 
-        # Build the user message with patient context
-        user_msg = message
+        # Preprocess time/date references and symptom hints
+        processed_message = self._preprocess_time_references(message)
+        processed_message = self._add_symptom_hints(processed_message)
+
+        # Build the user message with STRONG language directive
+        user_msg = processed_message
+
+        # Language directive — this is the PRIMARY mechanism for language switching.
+        # Must be BEFORE the message so Gemini processes it first.
+        lang_directives = {
+            "ru": "[ЯЗЫК: РУССКИЙ. Отвечай ТОЛЬКО на русском языке. НЕ используй узбекский.]",
+            "uz": "",  # Default — system prompt is already in Uzbek, no extra directive needed
+        }
+        lang_prefix = lang_directives.get(language, "")
+
+        # Patient name — only add if meaningful and not already in message
+        name_prefix = ""
         if patient_context:
-            ctx_parts = []
-            if patient_context.get("full_name"):
-                ctx_parts.append(f"Patient: {patient_context['full_name']}")
-            if patient_context.get("language_preference"):
-                ctx_parts.append(f"Language: {patient_context['language_preference']}")
-            if patient_context.get("id"):
-                ctx_parts.append(f"Patient ID: {patient_context['id']}")
-            if ctx_parts:
-                user_msg = f"[Context: {', '.join(ctx_parts)}]\n{message}"
+            name = patient_context.get("full_name", "")
+            if name and name not in processed_message:
+                # Check if name already in recent history
+                name_in_history = False
+                for entry in (history or [])[-4:]:
+                    parts = getattr(entry, "parts", [])
+                    for p in parts:
+                        text_val = getattr(p, "text", "")
+                        if isinstance(text_val, str) and name.lower() in text_val.lower():
+                            name_in_history = True
+                            break
+                    if name_in_history:
+                        break
+                if not name_in_history:
+                    name_prefix = f"(Bemor: {name}) " if language == "uz" else f"(Пациент: {name}) " if language == "ru" else ""
+
+        # Assemble: [LANG DIRECTIVE] (Patient name) actual message
+        parts_list = []
+        if lang_prefix:
+            parts_list.append(lang_prefix)
+        user_msg = name_prefix + processed_message
+        if parts_list:
+            user_msg = "\n".join(parts_list) + "\n" + user_msg
 
         # Start or continue chat
         chat_session = self.model.start_chat(history=history)
@@ -188,8 +219,8 @@ class GeminiService:
                 break
 
             # Collect ALL function calls from this turn (Gemini may return
-            # multiple in one response, e.g. get_department_info + navigate_screen).
-            # We must execute all of them and send all results back together.
+            # multiple in one response). We must execute all of them and
+            # send all results back together.
             turn_calls: list[tuple[Any, str, dict]] = []  # (fc, name, args)
             for part in parts:
                 if hasattr(part, "function_call") and part.function_call and part.function_call.name:
@@ -239,9 +270,19 @@ class GeminiService:
         # Sanitise — ensure it's natural language, not JSON
         text = self._sanitise_text(text)
 
+        # Add variety — avoid repeating the same opening phrase
+        text = self._add_variety(text, chat_session.history)
+
         # Fallback when Gemini returned no usable text
         if not text:
-            text = "Kechirasiz, tushunolmadim. Iltimos, qayta urinib ko'ring."
+            _FALLBACK = {
+                "uz": "Kechirasiz, tushunolmadim. Qayta urinib ko'ring.",
+                "ru": "Извините, я не понял. Попробуйте ещё раз.",
+            }
+            text = _FALLBACK.get(language, _FALLBACK["uz"])
+
+        # Final polish for natural Uzbek output
+        text = self._polish_uzbek_response(text)
 
         # Determine UI action from function calls
         ui_action = self._determine_ui_action(all_function_calls)
@@ -357,11 +398,15 @@ class GeminiService:
 
         cleaned = text.strip()
 
-        # Strip state tags that Gemini echoes back
+        # Strip tags that Gemini might echo back
         cleaned = re.sub(r'\[CURRENT_STATE:\s*[^\]]*\]\s*', '', cleaned).strip()
         cleaned = re.sub(r'\[USER_ACTION:\s*[^\]]*\]\s*', '', cleaned).strip()
         cleaned = re.sub(r'\[SYSTEM:\s*[^\]]*\]\s*', '', cleaned).strip()
         cleaned = re.sub(r'\[Context:\s*[^\]]*\]\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\(Bemor:\s*[^)]*\)\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\(Пациент:\s*[^)]*\)\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\[ЯЗЫК:\s*[^\]]*\]\s*', '', cleaned).strip()
+        cleaned = re.sub(r'\[Called\s+[^\]]*\]\s*', '', cleaned).strip()
 
         # Strip markdown code fences
         if cleaned.startswith("```") and cleaned.endswith("```"):
@@ -391,6 +436,301 @@ class GeminiService:
             return ""
 
         return cleaned
+
+    # ------------------------------------------------------------------
+    # Function result summarisation for history
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _summarize_function_result(fn_name: str, result: dict) -> str:
+        """Summarise function results as human-readable text for conversation history.
+
+        Instead of storing raw JSON in history (which wastes tokens and confuses
+        Gemini), store a brief Uzbek summary so Gemini can reference it naturally.
+        """
+        if not result or not isinstance(result, dict):
+            return f"[{fn_name}: natija yo'q]"
+
+        if "error" in result:
+            return f"[{fn_name}: xatolik — {result.get('message', result['error'])}]"
+
+        if fn_name == "get_department_info":
+            docs = result.get("doctors", [])
+            if docs:
+                names = ", ".join(d.get("name", d.get("full_name", "")) for d in docs[:3])
+                return f"[Bo'lim: {result.get('name', '')}. Shifokorlar: {names}]"
+            depts = result.get("departments", [])
+            if depts:
+                names = ", ".join(d.get("name", "") for d in depts[:4])
+                return f"[Bo'limlar: {names}]"
+            return f"[Bo'lim: {result.get('name', 'topildi')}]"
+
+        if fn_name == "get_available_slots":
+            slots = result.get("available_slots", [])
+            if isinstance(slots, list) and slots:
+                times = ", ".join(s if isinstance(s, str) else s.get("start", "") for s in slots[:5])
+                return f"[{result.get('date', '')}: bo'sh vaqtlar — {times}]"
+            return f"[{result.get('date', '')}: bo'sh vaqt yo'q]"
+
+        if fn_name == "book_appointment":
+            code = result.get("confirmation_code", "")
+            return f"[Qabul yozildi. Kod: {code}]"
+
+        if fn_name == "lookup_patient":
+            if result.get("found"):
+                return f"[Bemor topildi: {result.get('full_name', '')}]"
+            return "[Bemor topilmadi]"
+
+        if fn_name == "register_patient":
+            return f"[Bemor ro'yxatdan o'tdi: {result.get('full_name', '')}]"
+
+        if fn_name == "check_in":
+            if result.get("success"):
+                return f"[Check-in muvaffaqiyatli. Navbat: {result.get('queue_position', '?')}]"
+            return f"[Check-in: {result.get('message', 'natija')}]"
+
+        if fn_name == "get_queue_status":
+            return f"[Navbat: {result.get('waiting_count', '?')} kishi, ~{result.get('estimated_wait_minutes', '?')} daqiqa]"
+
+        if fn_name == "issue_queue_ticket":
+            return f"[Chiptangiz: {result.get('ticket_number', '?')}]"
+
+        if fn_name == "search_faq":
+            results_list = result.get("results", [])
+            if results_list:
+                return f"[FAQ: {len(results_list)} ta javob topildi]"
+            return "[FAQ: javob topilmadi]"
+
+        if fn_name == "process_payment":
+            return f"[To'lov: {result.get('status', result.get('message', 'jarayonda'))}]"
+
+        if fn_name == "escalate_to_human":
+            return "[Xodimga uzatildi]"
+
+        # Fallback
+        return f"[{fn_name}: bajarildi]"
+
+    # ------------------------------------------------------------------
+    # Anti-repetition
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _add_variety(text: str, history: list) -> str:
+        """Add variety to responses by replacing repeated greeting patterns.
+
+        Checks if the response starts with the same phrase as a recent model
+        response. If so, swaps in an alternative to avoid robotic repetition.
+        """
+        if not text or not history:
+            return text
+
+        # Collect recent model responses
+        recent_starts: list[str] = []
+        for entry in history[-6:]:
+            if getattr(entry, "role", "") == "model":
+                for part in getattr(entry, "parts", []):
+                    t = getattr(part, "text", "")
+                    if t and not t.startswith("["):
+                        # Take first ~40 chars as the "opening"
+                        recent_starts.append(t[:40].lower().strip())
+
+        if not recent_starts:
+            return text
+
+        text_start = text[:40].lower().strip()
+
+        # Check if we're repeating ourselves
+        repeating = any(text_start == rs for rs in recent_starts)
+        if not repeating:
+            return text
+
+        # Swap opening phrases to add variety
+        _ALTERNATIVES = {
+            "albatta": ["Xo'p", "Bo'ldi", "Ha, hozir"],
+            "xo'p": ["Albatta", "Yaxshi", "Bo'ldi"],
+            "yaxshi": ["Xo'p", "Tushundim", "Bo'ldi"],
+            "tushundim": ["Xo'p", "Yaxshi", "Bo'ldi"],
+            "marhamat": ["Albatta", "Xo'p", "Ha"],
+            "hozir": ["Bir lahza", "Ko'rib beraman", "Ha, hozir"],
+        }
+
+        for key, alts in _ALTERNATIVES.items():
+            if text.lower().startswith(key):
+                replacement = random.choice(alts)
+                # Preserve the case pattern of the original
+                return replacement + text[len(key):]
+
+        return text
+
+    # ------------------------------------------------------------------
+    # Smart preprocessing — time, symptoms, polish
+    # ------------------------------------------------------------------
+
+    def _preprocess_time_references(self, text: str) -> str:
+        """Normalize colloquial time references to help Gemini understand.
+
+        Converts things like '2 ga' → '14:00 ga', 'ertaga' → actual date, etc.
+        Does NOT modify the original text — adds a hidden hint for Gemini.
+        """
+        hints: list[str] = []
+        text_lower = text.lower().strip()
+
+        tz = timezone(timedelta(hours=5))  # Tashkent
+        now = datetime.now(tz)
+        today = now.date()
+        tomorrow = today + timedelta(days=1)
+
+        # Date references
+        if any(w in text_lower for w in ['bugun', 'hozir', 'tezroq', 'сегодня', 'today']):
+            hints.append(f"[sana: {today.isoformat()}]")
+        elif any(w in text_lower for w in ['ertaga', 'завтра', 'tomorrow']):
+            hints.append(f"[sana: {tomorrow.isoformat()}]")
+
+        # Weekday references (Uzbek)
+        weekdays_uz = {
+            'dushanba': 0, 'seshanba': 1, 'chorshanba': 2, 'payshanba': 3,
+            'juma': 4, 'shanba': 5, 'yakshanba': 6,
+        }
+        for day_name, day_num in weekdays_uz.items():
+            if day_name in text_lower:
+                days_ahead = day_num - today.weekday()
+                if days_ahead <= 0:
+                    days_ahead += 7
+                target = today + timedelta(days=days_ahead)
+                hints.append(f"[sana: {target.isoformat()}, {day_name}]")
+                break
+
+        # Colloquial time: "2 ga", "3 da", "10 ga"
+        time_match = re.search(r'(\d{1,2})\s*(?:ga|da|ge|de)\b', text_lower)
+        if time_match:
+            hour = int(time_match.group(1))
+            # Assume PM for hours 1-6 (clinic hours)
+            if 1 <= hour <= 6:
+                hour += 12
+            if 7 <= hour <= 18:
+                hints.append(f"[vaqt: {hour:02d}:00]")
+
+        # "ertalab" = morning, "peshin"/"tushdan keyin" = afternoon
+        if any(w in text_lower for w in ['ertalab', 'утром', 'morning']):
+            hints.append("[vaqt oralig'i: 08:00-12:00]")
+        elif any(w in text_lower for w in ['peshin', 'tushdan keyin', 'kechqurun', 'после обеда', 'afternoon']):
+            hints.append("[vaqt oralig'i: 14:00-18:00]")
+
+        # "yarim" = :30
+        if 'yarim' in text_lower:
+            hints.append("[yarim soat = :30]")
+
+        # Phone number normalization hint
+        phone_match = re.search(r'(\d[\d\s\-]{6,})', text_lower)
+        if phone_match:
+            digits = re.sub(r'\D', '', phone_match.group(1))
+            if len(digits) >= 9:
+                if not digits.startswith('998'):
+                    digits = '998' + digits[-9:]
+                hints.append(f"[telefon: +{digits}]")
+
+        if hints:
+            return text + " " + " ".join(hints)
+
+        return text
+
+    # Symptom → Department mapping for hint injection
+    _SYMPTOM_DEPT_MAP: dict[str, str] = {
+        # Uzbek symptoms
+        "bosh og'riq": 'nevrologiya', "boshim og'riydi": 'nevrologiya',
+        'bosh aylan': 'nevrologiya', 'uyqu': 'nevrologiya', 'asab': 'nevrologiya',
+        'tish': 'stomatologiya', 'tishim': 'stomatologiya', 'milk tish': 'stomatologiya',
+        "ko'z": 'oftalmologiya', "ko'zim": 'oftalmologiya', "ko'r": 'oftalmologiya',
+        'yurak': 'kardiologiya', 'yuragim': 'kardiologiya', 'bosim': 'kardiologiya',
+        'qon bosim': 'kardiologiya',
+        'qorin': 'gastroenterologiya', 'oshqozon': 'gastroenterologiya',
+        'ich ket': 'gastroenterologiya', 'qayt': 'gastroenterologiya', 'qornim': 'gastroenterologiya',
+        'quloq': 'lor', 'burun': 'lor', 'tomoq': 'lor', 'tomoqim': 'lor',
+        'teri': 'dermatologiya', 'toshma': 'dermatologiya', 'qichish': 'dermatologiya',
+        'allergiya': 'dermatologiya',
+        'bola': 'pediatriya', 'bolam': 'pediatriya',
+        'homilador': 'ginekologiya', 'ayollar': 'ginekologiya', 'ginekolog': 'ginekologiya',
+        'suyak': 'ortopediya', "bo'g'im": 'ortopediya', 'belim': 'ortopediya',
+        "bel og'riq": 'ortopediya', 'orqa': 'ortopediya',
+        'operatsiya': 'xirurgiya', 'jarroh': 'xirurgiya', 'xirurg': 'xirurgiya',
+        'tekshiruv': 'terapiya', 'analiz': 'terapiya', 'check-up': 'terapiya',
+        'umumiy': 'terapiya', 'shamollash': 'terapiya', 'isitma': 'terapiya',
+        'stress': 'psixologiya', 'depressiya': 'psixologiya', 'ruhiy': 'psixologiya',
+        # Russian symptoms
+        'голова': 'nevrologiya', 'головная': 'nevrologiya',
+        'зуб': 'stomatologiya', 'зубы': 'stomatologiya',
+        'глаз': 'oftalmologiya', 'зрение': 'oftalmologiya',
+        'сердце': 'kardiologiya', 'давление': 'kardiologiya',
+        'живот': 'gastroenterologiya', 'желудок': 'gastroenterologiya',
+        'ухо': 'lor', 'нос': 'lor', 'горло': 'lor',
+        'кожа': 'dermatologiya', 'сыпь': 'dermatologiya',
+        'ребенок': 'pediatriya', 'ребёнок': 'pediatriya',
+        'спина': 'ortopediya', 'поясница': 'ortopediya',
+        # Common no-apostrophe variants (kiosk keyboard input)
+        'boshim ogriydi': 'nevrologiya', 'bosh ogriq': 'nevrologiya',
+        'tishim ogriydi': 'stomatologiya',
+        'kozim': 'oftalmologiya', 'koz': 'oftalmologiya',
+        'yuragim ogriydi': 'kardiologiya',
+        'qornim ogriydi': 'gastroenterologiya',
+        'qulogim ogriydi': 'lor',
+        'belim ogriydi': 'ortopediya', 'bel ogriq': 'ortopediya',
+        'bogim': 'ortopediya',
+    }
+
+    def _add_symptom_hints(self, text: str) -> str:
+        """Detect symptoms in text and add department hints for Gemini."""
+        text_lower = text.lower()
+        detected: set[str] = set()
+
+        for symptom, dept in self._SYMPTOM_DEPT_MAP.items():
+            if symptom in text_lower:
+                detected.add(dept)
+
+        if detected:
+            dept_hint = ", ".join(detected)
+            return text + f" [mos bo'lim: {dept_hint}]"
+        return text
+
+    def _polish_uzbek_response(self, text: str) -> str:
+        """Final polish for natural Uzbek output."""
+        if not text:
+            return text
+
+        result = text
+
+        # Fix double spaces
+        result = re.sub(r' {2,}', ' ', result)
+
+        # Fix common Gemini Uzbek mistakes
+        _REPLACEMENTS = {
+            'Sizga qanday yordam bera olaman?': 'Nima qilib beray?',
+            'Sizga qanday yordam bera olaman': 'Nima qilib beray',
+            'Men sizga yordam berishga tayyorman': 'Yordam beraman',
+            'Hurmatli bemor': '',
+            'hurmatli bemor': '',
+            'null': '',
+            'undefined': '',
+            'None': '',
+            'Error': 'muammo',
+            'error': 'muammo',
+        }
+
+        for old, new in _REPLACEMENTS.items():
+            if old in result:
+                result = result.replace(old, new)
+
+        # Remove trailing punctuation weirdness
+        result = result.strip()
+        result = re.sub(r'[.]{2,}', '.', result)   # Fix multiple dots
+        result = re.sub(r'[!]{2,}', '!', result)   # Fix multiple exclamation marks
+
+        result = result.strip()
+
+        # Ensure response doesn't start with a lowercase letter (looks broken)
+        if result and result[0].islower() and not result.startswith(('va ', 'yoki ', 'ham ')):
+            result = result[0].upper() + result[1:]
+
+        return result
 
     # ------------------------------------------------------------------
     # Retry logic
@@ -625,7 +965,11 @@ class GeminiService:
 
     @staticmethod
     def _serialise_history(history: list) -> list[dict]:
-        """Convert Gemini Content objects to JSON-serialisable dicts."""
+        """Convert Gemini Content objects to JSON-serialisable dicts.
+
+        Function calls/responses are stored with metadata so _deserialise_history
+        can reconstruct human-readable summaries.
+        """
         entries = []
         for content in history:
             parts = []
@@ -650,9 +994,17 @@ class GeminiService:
                     and part.function_response
                     and part.function_response.name
                 ):
+                    # Store response name + result summary for history
+                    fr = part.function_response
+                    resp_data = {}
+                    try:
+                        resp_data = dict(fr.response) if fr.response else {}
+                    except Exception:
+                        pass
                     parts.append({
                         "function_response": {
-                            "name": part.function_response.name,
+                            "name": fr.name,
+                            "result": resp_data,
                         }
                     })
             if parts:
@@ -663,8 +1015,8 @@ class GeminiService:
     def _deserialise_history(entries: list[dict]) -> list:
         """Convert stored dicts back to Gemini Content format.
 
-        Includes text summaries of function calls so Gemini remembers
-        what actions it already took.
+        Uses _summarize_function_result for human-readable function summaries
+        instead of raw JSON — saves tokens and helps Gemini reference past actions.
         """
         history = []
         for entry in entries:
@@ -673,19 +1025,15 @@ class GeminiService:
                 if "text" in p and p["text"]:
                     text_parts.append(genai.protos.Part(text=p["text"]))
                 elif "function_call" in p:
-                    # Preserve function call as text summary so Gemini remembers
+                    # Brief note that a function was called
                     fc = p["function_call"]
-                    args_str = ", ".join(
-                        f"{k}={v}" for k, v in fc.get("args", {}).items()
-                    )
-                    summary = f"[Called {fc['name']}({args_str})]"
-                    text_parts.append(genai.protos.Part(text=summary))
+                    text_parts.append(genai.protos.Part(text=f"[{fc['name']} chaqirildi]"))
                 elif "function_response" in p:
-                    # Preserve function response as brief note
+                    # Human-readable summary of function result
                     fr = p["function_response"]
-                    text_parts.append(
-                        genai.protos.Part(text=f"[{fr['name']} completed]")
-                    )
+                    result = fr.get("result", {})
+                    summary = GeminiService._summarize_function_result(fr["name"], result)
+                    text_parts.append(genai.protos.Part(text=summary))
             if text_parts:
                 # Avoid consecutive same-role entries (Gemini rejects them)
                 if history and history[-1].role == entry["role"]:
@@ -743,6 +1091,20 @@ class GeminiService:
             return {"error": "Invalid database session"}
 
         if fn_name == "book_appointment":
+            # Validate required fields before attempting booking
+            missing = []
+            if not args.get("doctor_id"):
+                missing.append("shifokor")
+            if not args.get("date"):
+                missing.append("sana")
+            if not args.get("time"):
+                missing.append("vaqt")
+            if missing:
+                return {
+                    "status": "incomplete",
+                    "message": f"Qabulni yakunlash uchun kerak: {', '.join(missing)}",
+                    "missing_fields": missing,
+                }
             return await self._fn_real_book_appointment(db, clinic_id, args)
         elif fn_name == "check_in":
             return await self._fn_real_check_in(db, clinic_id, args)
@@ -766,8 +1128,6 @@ class GeminiService:
             return await self._fn_real_search_faq(db, clinic_id, args)
         elif fn_name == "escalate_to_human":
             return await self._fn_escalate_to_human(args)
-        elif fn_name == "navigate_screen":
-            return await self._fn_navigate_screen(args)
         else:
             return {"error": f"Unknown function: {fn_name}"}
 
@@ -779,8 +1139,6 @@ class GeminiService:
         # Generic handlers that work without DB
         if fn_name == "escalate_to_human":
             return await self._fn_escalate_to_human(args)
-        if fn_name == "navigate_screen":
-            return await self._fn_navigate_screen(args)
         logger.warning(f"No demo handler for function: {fn_name}")
         return {"error": f"Function {fn_name} mavjud emas"}
 
@@ -790,69 +1148,57 @@ class GeminiService:
 
     @staticmethod
     def _determine_ui_action(function_calls: list[dict]) -> str | None:
-        """Determine a UI navigation hint based on executed functions.
+        """Determine a UI navigation hint based on executed data functions.
 
-        Checks for explicit ``navigate_screen`` calls first, then falls
-        back to deriving the action from the last function call.  Action
-        strings match the frontend's ``handleUIAction`` switch cases AND
-        the orchestrator's ``_STATE_UI_ACTIONS`` values so that both
-        UI-data mapping and state-machine transitions work correctly.
+        Derives the UI action automatically from which data function was
+        called — no explicit navigate_screen needed.  Scans backwards so
+        the most recent function takes priority.
         """
         if not function_calls:
             return None
 
-        # Explicit navigate_screen takes priority
-        for fc in function_calls:
-            if fc["name"] == "navigate_screen":
-                screen = (fc.get("args") or {}).get("screen", "")
-                _nav_map = {
-                    "departments": "show_departments",
-                    "doctors": "show_doctors",
-                    "timeslots": "show_slots",
-                    "time_slots": "show_slots",
-                    "booking_confirm": "show_booking_confirmation",
-                    "payment": "show_payment",
-                    "queue_ticket": "show_queue_ticket",
-                    "info": "show_info",
-                    "faq": "show_faq",
-                    "checkin": "show_checkin",
-                    "phone_input": "show_checkin",
-                    "greeting": "show_greeting",
-                    "farewell": "show_farewell",
-                }
-                mapped = _nav_map.get(screen)
-                if mapped:
-                    return mapped
-
-        # Fallback: derive from the last data-fetching function call.
-        # Scan backwards so the most recent function takes priority.
-        last_fn = function_calls[-1]["name"]
-
-        # Special case: get_department_info that returned doctors for a
-        # specific department should navigate to doctors, not departments.
+        # Derive UI action from data functions
         for fc in reversed(function_calls):
-            if fc["name"] == "get_department_info":
-                result = fc.get("result") or {}
+            name = fc["name"]
+            result = fc.get("result") or {}
+
+            if name == "get_department_info":
+                # If returned doctors for a specific dept → show doctors
                 if isinstance(result.get("doctors"), list) and result["doctors"]:
                     return "show_doctors"
-                # Single department matched → still show departments
                 if result.get("department_id") or result.get("name"):
                     return "show_departments"
-                break
+                if result.get("departments"):
+                    return "show_departments"
 
-        ui_map = {
-            "book_appointment": "show_queue_ticket",
-            "check_in": "show_checkin_confirmation",
-            "get_available_slots": "show_slots",
-            "get_department_info": "show_departments",
-            "get_doctor_info": "show_doctors",
-            "process_payment": "show_payment",
-            "get_queue_status": "show_queue_status",
-            "issue_queue_ticket": "show_queue_ticket",
-            "search_faq": "show_faq",
-            "escalate_to_human": "show_handoff",
-        }
-        return ui_map.get(last_fn)
+            elif name == "get_doctor_info":
+                return "show_doctors"
+
+            elif name == "get_available_slots":
+                return "show_slots"
+
+            elif name == "book_appointment":
+                return "show_queue_ticket"
+
+            elif name == "check_in":
+                return "show_checkin"
+
+            elif name == "issue_queue_ticket":
+                return "show_queue_ticket"
+
+            elif name == "process_payment":
+                return "show_payment"
+
+            elif name == "search_faq":
+                return "show_faq"
+
+            elif name == "escalate_to_human":
+                return "show_handoff"
+
+            elif name == "get_queue_status":
+                return "show_queue_status"
+
+        return None
 
     # ==================================================================
     # REAL DB function implementations
@@ -1134,16 +1480,6 @@ class GeminiService:
         if matches:
             return {"results": matches, "count": len(matches)}
         return {"results": [], "count": 0, "message": "No matching FAQs found"}
-
-    async def _fn_navigate_screen(self, args: dict) -> dict:
-        """Handle navigate_screen — simply acknowledge the navigation request.
-
-        The actual UI navigation is handled by _determine_ui_action which reads
-        this function call's args and emits the correct ui_action to the frontend.
-        """
-        screen = args.get("screen", "")
-        logger.info("Navigate screen requested", extra={"screen": screen})
-        return {"navigated": True, "screen": screen}
 
     async def _fn_escalate_to_human(self, args: dict) -> dict:
         reason = args.get("reason", "Visitor requested human assistance")
