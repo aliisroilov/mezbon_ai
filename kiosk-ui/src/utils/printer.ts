@@ -1,12 +1,17 @@
 /**
  * Thermal printer integration for queue tickets.
  *
- * Uses two approaches:
- * 1. Backend ESC/POS endpoint (preferred) — sends commands directly to printer
- * 2. Browser iframe print fallback — uses a print stylesheet for 80mm paper
+ * Strategy (in order):
+ * 1. Local print proxy at http://localhost:9111/print — runs on the kiosk
+ *    machine and sends ESC/POS commands directly to the thermal printer.
+ *    This prints SILENTLY with no dialog.
+ * 2. Browser iframe print fallback — opens print dialog (requires user confirm)
  */
 
-import { PRINTER_ENABLED, API_BASE } from "../config";
+import { PRINTER_ENABLED } from "../config";
+
+/** URL of the local print proxy running on the kiosk machine */
+const LOCAL_PRINT_PROXY = "http://localhost:9111";
 
 interface TicketData {
   ticketNumber: string;
@@ -21,31 +26,38 @@ interface TicketData {
 
 /**
  * Print a queue ticket on the thermal printer.
- * Tries the backend endpoint first, falls back to browser print.
+ * Tries local print proxy first (silent), falls back to browser print dialog.
  */
 export async function printTicket(ticket: TicketData): Promise<boolean> {
   if (!PRINTER_ENABLED) {
-    if (import.meta.env.DEV) console.log("[printer] Printing disabled (not in kiosk mode)");
+    if (import.meta.env.DEV) console.log("[printer] Printing disabled");
     return false;
   }
 
-  // Try backend printer endpoint first
+  if (import.meta.env.DEV) console.log("[printer] Printing ticket:", ticket.ticketNumber);
+
+  // Try local print proxy first (silent, no dialog)
   try {
-    const response = await fetch(`${API_BASE}/print/ticket`, {
+    const res = await fetch(`${LOCAL_PRINT_PROXY}/print`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(ticket),
+      body: JSON.stringify({
+        type: "queue_ticket",
+        ...ticket,
+      }),
+      signal: AbortSignal.timeout(3000), // 3s timeout
     });
 
-    if (response.ok) {
-      if (import.meta.env.DEV) console.log("[printer] Ticket printed via backend");
+    if (res.ok) {
+      if (import.meta.env.DEV) console.log("[printer] Ticket printed silently via local proxy");
       return true;
     }
+    if (import.meta.env.DEV) console.warn("[printer] Local proxy returned", res.status);
   } catch {
-    if (import.meta.env.DEV) console.warn("[printer] Backend printer failed, falling back to browser print");
+    if (import.meta.env.DEV) console.log("[printer] Local print proxy not available, using browser print");
   }
 
-  // Fallback: browser print with iframe
+  // Fallback: browser print with iframe (shows dialog)
   return printViaBrowser(ticket);
 }
 
@@ -98,7 +110,7 @@ function printViaBrowser(ticket: TicketData): boolean {
     // Clinic name
     const header = doc.createElement("div");
     header.className = "center bold";
-    header.textContent = "MEZBON CLINIC";
+    header.textContent = "NANO MEDICAL CLINIC";
     body.appendChild(header);
 
     body.appendChild(createDivider(doc));

@@ -72,17 +72,17 @@ export function useVoiceChat({
 
       const now = Date.now();
       if (now - lastSendRef.current < 2000) {
-        console.log("[voice] Audio send throttled (cooldown)");
+        if (import.meta.env.DEV) console.log("[voice] Audio send throttled (cooldown)");
         return;
       }
       lastSendRef.current = now;
-      console.log(`[voice] Sending audio to backend: ${blob.size} bytes`);
+      if (import.meta.env.DEV) console.log(`[voice] Sending audio to backend: ${blob.size} bytes`);
       setIsListening(false);
       setIsProcessing(true);
       if (deviceId) {
         emitSpeechAudio(deviceId, sessionId ?? "", blob, "wav");
       } else {
-        console.warn("[voice] No deviceId — cannot send audio");
+        if (import.meta.env.DEV) console.warn("[voice] No deviceId — cannot send audio");
         setIsProcessing(false);
       }
     },
@@ -103,13 +103,13 @@ export function useVoiceChat({
     const W = window as any;
     const SpeechRecognitionAPI = W.SpeechRecognition || W.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
-      console.error("[voice] Web Speech API not supported in this browser");
+      if (import.meta.env.DEV) console.error("[voice] Web Speech API not supported in this browser");
       return;
     }
 
     // Stop previous if active
     if (recognitionRef.current) {
-      try { (recognitionRef.current as any).abort(); } catch {}
+      try { (recognitionRef.current as any).abort(); } catch (e) { if (import.meta.env.DEV) console.debug('Recognition abort/start error:', e); }
     }
 
     const recognition = new SpeechRecognitionAPI();
@@ -125,7 +125,7 @@ export function useVoiceChat({
 
       const now = Date.now();
       if (now - lastSendRef.current < 2000) {
-        console.log("[voice] Browser STT throttled");
+        if (import.meta.env.DEV) console.log("[voice] Browser STT throttled");
         return;
       }
       lastSendRef.current = now;
@@ -139,14 +139,14 @@ export function useVoiceChat({
       if (hasCyrillic) language = "ru";
       else if (hasLatin && !hasUzMarkers) language = "en";
 
-      console.log(`[voice] Browser STT: "${transcript}" (${language})`);
+      if (import.meta.env.DEV) console.log(`[voice] Browser STT: "${transcript}" (${language})`);
       setIsListening(false);
       setIsProcessing(true);
 
       if (deviceId) {
         emitChatText(deviceId, sessionId ?? "", transcript, language);
       } else {
-        console.warn("[voice] No deviceId — cannot send text");
+        if (import.meta.env.DEV) console.warn("[voice] No deviceId — cannot send text");
         setIsProcessing(false);
       }
     };
@@ -156,28 +156,28 @@ export function useVoiceChat({
         // Normal — user didn't speak, just restart
         return;
       }
-      console.warn("[voice] Browser STT error:", event.error);
+      if (import.meta.env.DEV) console.warn("[voice] Browser STT error:", event.error);
     };
 
     recognition.onend = () => {
       // Auto-restart if still listening
       const state = useSessionStore.getState();
       if (state.isListening && !state.isProcessing && !state.isSpeaking && USE_BROWSER_STT) {
-        try { recognition.start(); } catch {}
+        try { recognition.start(); } catch (e) { if (import.meta.env.DEV) console.debug('Recognition abort/start error:', e); }
       }
     };
 
     try {
       recognition.start();
-      console.log("[voice] Browser STT started");
+      if (import.meta.env.DEV) console.log("[voice] Browser STT started");
     } catch (e) {
-      console.error("[voice] Failed to start browser STT:", e);
+      if (import.meta.env.DEV) console.error("[voice] Failed to start browser STT:", e);
     }
   }, [deviceId, sessionId, setIsListening, setIsProcessing]);
 
   const stopBrowserSTT = useCallback(() => {
     if (recognitionRef.current) {
-      try { (recognitionRef.current as any).abort(); } catch {}
+      try { (recognitionRef.current as any).abort(); } catch (e) { if (import.meta.env.DEV) console.debug('Recognition abort/start error:', e); }
       recognitionRef.current = null;
     }
   }, []);
@@ -219,9 +219,11 @@ export function useVoiceChat({
     }
   }, [shouldListen, isRecording, isSpeaking, isProcessing, setShouldListen, setIsListening, startRecording]);
 
-  // Auto-start mic on mount
+  // Auto-start mic on mount — only if voice is available
+  // (voiceAvailable is set to false when STT repeatedly fails)
+  const voiceAvailable = useSessionStore((s) => s.voiceAvailable);
   useEffect(() => {
-    if (!autoStart) return;
+    if (!autoStart || !voiceAvailable) return;
     const timer = setTimeout(() => {
       if (!isRecording && !isSpeaking && !isProcessing) {
         setIsListening(true);
@@ -234,7 +236,8 @@ export function useVoiceChat({
   }, []);
 
   // Safety timeout: if isProcessing stays true for >15s, something went wrong.
-  // Reset processing flag and re-enable mic so the user isn't stuck.
+  // Reset processing flag and show error, but do NOT auto-restart mic.
+  // The user can tap mic manually to retry — prevents infinite restart loop.
   const processingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (isProcessing) {
@@ -245,7 +248,7 @@ export function useVoiceChat({
           s.setAIMessage(
             s.aiMessage || "Kechirasiz, texnik xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.",
           );
-          s.setShouldListen(true);
+          // Do NOT setShouldListen(true) — user taps mic to retry
         }
       }, 15000);
     } else if (processingTimerRef.current) {

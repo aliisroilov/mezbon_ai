@@ -295,6 +295,7 @@ navigate_screen = FunctionDeclaration(
                     "payment",
                     "queue_ticket",
                     "info",
+                    "faq",
                     "farewell",
                 ],
             },

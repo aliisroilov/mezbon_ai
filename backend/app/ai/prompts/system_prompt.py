@@ -10,7 +10,7 @@ It must enforce:
 IMPORTANT: Keep SYSTEM_PROMPT_TEMPLATE under ~800 tokens for fast Gemini responses.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # ── Uzbek weekday names ──────────────────────────────────────────────────────
 _WEEKDAYS_UZ = [
@@ -77,7 +77,9 @@ def build_system_prompt(clinic_data: dict) -> str:
             - patient_context (dict | None)
             - device_location (str)
     """
-    now = datetime.now(timezone.utc)
+    # Tashkent is UTC+5 — clinic operates in local time
+    _TZ_TASHKENT = timezone(timedelta(hours=5))
+    now = datetime.now(_TZ_TASHKENT)
     weekday_uz = _WEEKDAYS_UZ[now.weekday()]
 
     # ── Departments section ──────────────────────────────────────────────

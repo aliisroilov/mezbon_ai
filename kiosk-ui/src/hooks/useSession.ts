@@ -16,6 +16,12 @@ import type { OrchestratorResponse } from "../types";
 /** Delay (ms) before mic auto-restarts after text response (time to read) */
 const MIC_RESTART_DELAY = 3000;
 
+/** After this many consecutive empty/error responses, mark voice as unavailable */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+/** Tracks consecutive empty responses — if too many, STT service is likely down */
+let consecutiveEmptyCount = 0;
+
 export function useSession() {
   const store = useSessionStore;
 
@@ -35,38 +41,56 @@ export function useSession() {
       }),
       onAIProcessing((data) => {
         // Instant acknowledgment from backend — ensure processing indicator shows
-        console.log("[session] ai:processing — backend acknowledged audio");
+        if (import.meta.env.DEV) console.log("[session] ai:processing — backend acknowledged audio");
         const s = store.getState();
         if (data.session_id) s.setSessionId(data.session_id);
         s.setIsProcessing(true);
       }),
       onAIResponse((data: OrchestratorResponse) => {
-        console.log("=== 🎤 VOICE DEBUG: ai:response received ===");
-        console.log("  text:", JSON.stringify(data.text));
-        console.log("  text length:", data.text?.length ?? 0);
-        console.log("  transcript:", JSON.stringify(data.transcript));
-        console.log("  state:", data.state);
-        console.log("  ui_action:", data.ui_action);
-        console.log("  session_id:", data.session_id);
-        console.log("  has ui_data:", !!data.ui_data);
-        console.log("  all keys:", Object.keys(data));
-        console.log("=== END VOICE DEBUG ===");
+        if (import.meta.env.DEV) {
+          console.log("=== VOICE DEBUG: ai:response received ===");
+          console.log("  text:", JSON.stringify(data.text));
+          console.log("  text length:", data.text?.length ?? 0);
+          console.log("  transcript:", JSON.stringify(data.transcript));
+          console.log("  state:", data.state);
+          console.log("  ui_action:", data.ui_action);
+          console.log("  session_id:", data.session_id);
+          console.log("  has ui_data:", !!data.ui_data);
+          console.log("  all keys:", Object.keys(data));
+          console.log("=== END VOICE DEBUG ===");
+        }
 
         const s = store.getState();
         s.setSessionId(data.session_id);
         s.setState(data.state);
         s.setIsProcessing(false);
 
+        // Update UI language when backend detects a different language from STT
+        if (data.language && data.language !== s.language) {
+          s.setLanguage(data.language);
+        }
+
         // Empty text = backend says "stay silent" (e.g. 3+ empty transcripts)
-        // Wait longer before re-enabling mic to prevent rapid-fire loop
+        // Do NOT auto-restart mic — this was causing an infinite loop when
+        // Muxlisa STT is down (all transcripts empty → mic restart → empty → repeat).
+        // The user can manually tap the mic button to try again.
         if (!data.text || data.text.trim().length === 0) {
-          console.log("[session] Empty response — 5s cooldown before mic restart");
+          consecutiveEmptyCount++;
+          if (import.meta.env.DEV) console.log(`[session] Empty response #${consecutiveEmptyCount} — mic stays off (user can tap to retry)`);
           s.setIsSpeaking(false);
-          setTimeout(() => {
-            store.getState().setShouldListen(true);
-          }, 5000); // 5s cooldown to break silence → empty transcript loop
+          s.setIsListening(false);
+          // After repeated failures, mark voice as unavailable so auto-start stops
+          if (consecutiveEmptyCount >= MAX_CONSECUTIVE_FAILURES) {
+            if (import.meta.env.DEV) console.warn("[session] STT appears down — disabling voice auto-start");
+            s.setVoiceAvailable(false);
+          }
+          // Do NOT setShouldListen(true) — breaks the infinite loop
           return;
         }
+
+        // Successful response — reset failure counter and ensure voice is marked available
+        consecutiveEmptyCount = 0;
+        if (!s.voiceAvailable) s.setVoiceAvailable(true);
 
         s.setAIMessage(data.text);
 
@@ -116,16 +140,15 @@ export function useSession() {
           data.message || "Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
         );
         if (import.meta.env.DEV) console.error("[useSession] ai:error received:", data);
-        // Re-enable mic after error so user can try again
-        setTimeout(() => {
-          store.getState().setShouldListen(true);
-        }, MIC_RESTART_DELAY);
+        // Do NOT auto-restart mic on errors — user can tap mic to retry.
+        // Auto-restart was causing infinite loops when STT service is down.
       }),
       onSessionTimeout((data) => {
         if (!data.warning) {
           // Only reset if we're not in the middle of processing or speaking
           const s = store.getState();
           if (!s.isProcessing && !s.isSpeaking && !s.isListening) {
+            consecutiveEmptyCount = 0;
             s.resetSession();
           }
         }

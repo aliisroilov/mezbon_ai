@@ -45,6 +45,8 @@ export type VisitorState =
   | "FAQ_RESPONSE"
   | "DEPARTMENT_INFO"
   | "DOCTOR_PROFILE"
+  | "SHOW_DEPARTMENT_INFO"
+  | "SHOW_DOCTOR_PROFILE"
   | "RECORD_FEEDBACK"
   | "COMPLAINT"
   | "HAND_OFF"
@@ -220,6 +222,7 @@ export interface OrchestratorResponse {
   text: string;
   audio_base64: string | null;
   state: VisitorState;
+  language: Language | null;
   ui_action: string | null;
   ui_data: Record<string, unknown> | null;
   patient: { id: string; name: string } | null;

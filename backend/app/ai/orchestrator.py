@@ -66,6 +66,7 @@ class OrchestratorResponse(BaseModel):
     ui_action: str | None = None
     ui_data: dict[str, Any] | None = None
     state: str
+    language: str | None = None
     patient: dict[str, Any] | None = None
     session_id: str
     transcript: str | None = None
@@ -296,6 +297,7 @@ class Orchestrator:
             ui_action=chat_response.ui_action or _STATE_UI_ACTIONS.get(final_state),
             ui_data=self._extract_ui_data(chat_response),
             state=final_state.value,
+            language=language or session.get("language"),
             patient=self._patient_from_context(context),
             session_id=session_id,
             transcript=transcript,
@@ -381,6 +383,7 @@ class Orchestrator:
             ui_action=chat_response.ui_action or _STATE_UI_ACTIONS.get(final_state),
             ui_data=self._extract_ui_data(chat_response),
             state=final_state.value,
+            language=language,
             patient=self._patient_from_context(context),
             session_id=session_id,
         )
@@ -562,7 +565,7 @@ class Orchestrator:
             try:
                 return SessionState(next_state)
             except ValueError:
-                pass
+                logger.debug("Invalid next_state from Gemini", extra={"next_state": next_state})
 
         ui = chat_response.ui_action
         if not ui:

@@ -351,8 +351,8 @@ def register_kiosk_events(
                         session_id, SessionState.INTENT_DISCOVERY
                     ):
                         await orchestrator.session_mgr.transition(session_id, target)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Intent-based state transition failed", extra={"error": str(e)})
 
             # Chat with Gemini
             updated_state = await orchestrator.session_mgr.get_state(session_id) or current_state

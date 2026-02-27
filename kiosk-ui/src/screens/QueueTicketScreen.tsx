@@ -7,7 +7,7 @@ import { CountUpNumber } from "../components/feedback/CountUpNumber";
 import { Button } from "../components/ui/Button";
 import { HeaderBar } from "../components/layout/HeaderBar";
 import { useSessionStore } from "../store/sessionStore";
-import { printQueueTicket } from "../services/printer";
+import { printTicket } from "../utils/printer";
 import { sounds } from "../utils/sounds";
 
 // ── Queue position visualization ────────────────────────────
@@ -75,17 +75,18 @@ export function QueueTicketScreen({ onDone }: QueueTicketScreenProps) {
   useEffect(() => {
     if (!queueTicket || !currentDepartment) return;
 
-    const { deviceId, patient, currentDoctor } = useSessionStore.getState();
+    const { deviceId, currentDoctor } = useSessionStore.getState();
 
     if (deviceId) {
-      printQueueTicket(deviceId, {
-        ticket_number: queueTicket.ticket_number,
-        patient_name: patient?.full_name || "Guest",
-        department_name: departmentName,
+      printTicket({
+        ticketNumber: queueTicket.ticket_number,
+        departmentName: departmentName,
+        doctorName: currentDoctor?.full_name,
+        date: new Date().toLocaleDateString("uz-UZ"),
+        time: new Date().toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" }),
+        roomNumber: String(room),
         floor: floor,
-        room: String(room),
-        estimated_wait: estimatedWait,
-        doctor_name: currentDoctor?.full_name,
+        estimatedWait: estimatedWait,
       });
     }
   }, [queueTicket, currentDepartment]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -193,11 +193,11 @@ export async function emitSpeechAudio(
 
   const s = getSocket();
   if (!s.connected) {
-    console.error("[socket] Cannot send audio — socket not connected");
+    if (import.meta.env.DEV) console.error("[socket] Cannot send audio — socket not connected");
     return;
   }
 
-  console.log(`[socket] Emitting kiosk:speech_audio — ${base64.length} chars base64, session: ${sessionId || "(new)"}`);
+  if (import.meta.env.DEV) console.log(`[socket] Emitting kiosk:speech_audio — ${base64.length} chars base64, session: ${sessionId || "(new)"}`);
   s.emit("kiosk:speech_audio", {
     device_id: deviceId,
     session_id: sessionId,
@@ -219,10 +219,10 @@ export function emitChatText(
 ): void {
   const s = getSocket();
   if (!s.connected) {
-    console.error("[socket] Cannot send text — socket not connected");
+    if (import.meta.env.DEV) console.error("[socket] Cannot send text — socket not connected");
     return;
   }
-  console.log(`[socket] Emitting kiosk:chat_text — "${text}", session: ${sessionId || "(new)"}`);
+  if (import.meta.env.DEV) console.log(`[socket] Emitting kiosk:chat_text — "${text}", session: ${sessionId || "(new)"}`);
   s.emit("kiosk:chat_text", {
     device_id: deviceId,
     session_id: sessionId,

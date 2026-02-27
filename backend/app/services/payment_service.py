@@ -233,7 +233,7 @@ async def check_payment_status(
             await db.flush()
 
     except NotImplementedError:
-        pass
+        logger.debug("Payment gateway status check not implemented", extra={"payment_id": str(payment.id)})
     except Exception as e:
         logger.warning(
             "Gateway status check failed",

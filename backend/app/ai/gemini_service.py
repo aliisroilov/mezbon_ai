@@ -312,8 +312,8 @@ class GeminiService:
 
             redis = get_redis()
             await redis.delete(f"chat:{session_id}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis chat history clear failed", extra={"session_id": session_id, "error": str(e)})
         logger.info("Session reset", extra={"session_id": session_id})
 
     # ------------------------------------------------------------------
@@ -436,8 +436,8 @@ class GeminiService:
                     if len(chat_session.history) >= 2:
                         chat_session.history.pop()  # empty model response
                         chat_session.history.pop()  # our message
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to trim Gemini history after IndexError", extra={"error": str(e)})
             except asyncio.TimeoutError:
                 logger.warning(
                     "Gemini timeout",
@@ -883,14 +883,74 @@ class GeminiService:
     async def _fn_real_check_in(
         self, db: Any, clinic_id: uuid.UUID, args: dict
     ) -> dict:
-        from app.services import appointment_service
+        from app.services import appointment_service, patient_service
 
         identifier = args["patient_identifier"]
-        appt_id = uuid.UUID(identifier)
-        appt = await appointment_service.check_in(db, clinic_id, appt_id)
+
+        # Try as UUID first (appointment_id or patient_id)
+        try:
+            parsed_uuid = uuid.UUID(identifier)
+        except ValueError:
+            parsed_uuid = None
+
+        if parsed_uuid:
+            # Could be an appointment UUID — try direct check-in
+            try:
+                appt = await appointment_service.check_in(db, clinic_id, parsed_uuid)
+                return {
+                    "appointment_id": str(appt.id),
+                    "status": appt.status.value,
+                    "message": "Successfully checked in",
+                }
+            except Exception:
+                # Not an appointment UUID — try as patient_id below
+                pass
+
+            # Try as patient_id — find today's scheduled appointment
+            today = date.today()
+            appts = await appointment_service.list_appointments(
+                db, clinic_id, date_from=today, date_to=today, patient_id=parsed_uuid,
+            )
+            scheduled = [a for a in appts if a.status.value == "SCHEDULED"]
+            if scheduled:
+                appt = await appointment_service.check_in(db, clinic_id, scheduled[0].id)
+                return {
+                    "appointment_id": str(appt.id),
+                    "status": appt.status.value,
+                    "message": "Successfully checked in",
+                }
+            return {"error": True, "message": "No scheduled appointment found for today"}
+
+        # Not a UUID — treat as phone number
+        # Normalize: strip spaces/dashes, add +998 if needed
+        phone = identifier.strip().replace(" ", "").replace("-", "")
+        if phone.startswith("998") and not phone.startswith("+"):
+            phone = "+" + phone
+        elif not phone.startswith("+998") and len(phone) >= 9:
+            phone = "+998" + phone.lstrip("+")
+
+        patient = await patient_service.lookup_by_phone(db, clinic_id, phone)
+        if not patient:
+            return {"error": True, "message": "Patient not found with this phone number"}
+
+        patient_uuid = uuid.UUID(str(patient["id"]))
+        today = date.today()
+        appts = await appointment_service.list_appointments(
+            db, clinic_id, date_from=today, date_to=today, patient_id=patient_uuid,
+        )
+        scheduled = [a for a in appts if a.status.value == "SCHEDULED"]
+        if not scheduled:
+            return {
+                "error": True,
+                "message": "No scheduled appointment found for today",
+                "patient_name": patient.get("full_name", ""),
+            }
+
+        appt = await appointment_service.check_in(db, clinic_id, scheduled[0].id)
         return {
             "appointment_id": str(appt.id),
             "status": appt.status.value,
+            "patient_name": patient.get("full_name", ""),
             "message": "Successfully checked in",
         }
 

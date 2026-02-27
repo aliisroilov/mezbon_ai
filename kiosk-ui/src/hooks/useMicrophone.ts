@@ -129,10 +129,10 @@ export function useMicrophone({
     const durationMs = Math.round((resampled.length / targetSampleRate) * 1000);
 
     if (wavBlob.size > 44 && durationMs > 500) {
-      console.log(`[mic] Sending audio: ${durationMs}ms, ${wavBlob.size} bytes`);
+      if (import.meta.env.DEV) console.log(`[mic] Sending audio: ${durationMs}ms, ${wavBlob.size} bytes`);
       onAudioReady?.(wavBlob);
     } else {
-      console.log(`[mic] Audio too short (${durationMs}ms), discarding`);
+      if (import.meta.env.DEV) console.log(`[mic] Audio too short (${durationMs}ms), discarding`);
     }
   }, [onAudioReady, targetSampleRate]);
 
@@ -186,9 +186,9 @@ export function useMicrophone({
 
       // CRITICAL: Resume AudioContext if suspended (browser autoplay policy)
       if (audioCtx.state === "suspended") {
-        console.log("[mic] AudioContext suspended, resuming...");
+        if (import.meta.env.DEV) console.log("[mic] AudioContext suspended, resuming...");
         await audioCtx.resume();
-        console.log("[mic] AudioContext resumed:", audioCtx.state);
+        if (import.meta.env.DEV) console.log("[mic] AudioContext resumed:", audioCtx.state);
       }
 
       const source = audioCtx.createMediaStreamSource(stream);
@@ -227,9 +227,9 @@ export function useMicrophone({
           workletNode.connect(audioCtx.destination);
 
           useWorklet = true;
-          console.log("[mic] Using AudioWorkletNode (modern)");
+          if (import.meta.env.DEV) console.log("[mic] Using AudioWorkletNode (modern)");
         } catch (err) {
-          console.warn("[mic] AudioWorklet failed, falling back to ScriptProcessor:", err);
+          if (import.meta.env.DEV) console.warn("[mic] AudioWorklet failed, falling back to ScriptProcessor:", err);
         }
       }
 
@@ -249,7 +249,7 @@ export function useMicrophone({
         source.connect(processor);
         processor.connect(audioCtx.destination);
 
-        console.log("[mic] Using ScriptProcessorNode (fallback)");
+        if (import.meta.env.DEV) console.log("[mic] Using ScriptProcessorNode (fallback)");
       }
 
       // Start in WAITING state — listening for speech
@@ -260,9 +260,11 @@ export function useMicrophone({
       silenceFrameCountRef.current = 0;
       speechStartTimeRef.current = 0;
 
-      console.log(
-        `[mic] Ready — WAITING for speech (threshold: ${silenceThreshold}, sampleRate: ${audioCtx.sampleRate}Hz)`
-      );
+      if (import.meta.env.DEV) {
+        console.log(
+          `[mic] Ready — WAITING for speech (threshold: ${silenceThreshold}, sampleRate: ${audioCtx.sampleRate}Hz)`
+        );
+      }
 
       // Tell worklet we're NOT recording yet (VAD decides when to start)
       // We'll send "start" when speech is detected
@@ -295,7 +297,7 @@ export function useMicrophone({
         ) {
           micStateRef.current = "RECORDING";
           speechStartTimeRef.current = Date.now();
-          console.log("[mic] Speech detected — RECORDING started");
+          if (import.meta.env.DEV) console.log("[mic] Speech detected — RECORDING started");
 
           // Tell worklet to start buffering
           if (workletNodeRef.current) {
@@ -309,7 +311,7 @@ export function useMicrophone({
           silenceFrameCountRef.current > SILENCE_END_FRAMES
         ) {
           const recordingDuration = Date.now() - speechStartTimeRef.current;
-          console.log(`[mic] Silence detected after ${recordingDuration}ms of speech — stopping`);
+          if (import.meta.env.DEV) console.log(`[mic] Silence detected after ${recordingDuration}ms of speech — stopping`);
           stopRecording();
           return;
         }
@@ -320,7 +322,7 @@ export function useMicrophone({
           speechStartTimeRef.current > 0 &&
           Date.now() - speechStartTimeRef.current > maxSpeechDuration * 1000
         ) {
-          console.warn("[mic] Max speech duration reached, stopping");
+          if (import.meta.env.DEV) console.warn("[mic] Max speech duration reached, stopping");
           stopRecording();
           return;
         }
@@ -332,7 +334,7 @@ export function useMicrophone({
     } catch (err) {
       startingRef.current = false;
       setHasPermission(false);
-      console.error("[mic] Failed to start:", err);
+      if (import.meta.env.DEV) console.error("[mic] Failed to start:", err);
     }
   }, [silenceThreshold, maxSpeechDuration, stopRecording, cleanup, SILENCE_END_FRAMES, SPEECH_START_FRAMES]);
 

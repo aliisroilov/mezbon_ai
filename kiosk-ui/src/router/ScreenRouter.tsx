@@ -85,6 +85,8 @@ function getScreenKey(state: VisitorState): ScreenKey {
     case "FAQ_RESPONSE":
     case "DEPARTMENT_INFO":
     case "DOCTOR_PROFILE":
+    case "SHOW_DEPARTMENT_INFO":
+    case "SHOW_DOCTOR_PROFILE":
       return "info";
     case "RECORD_FEEDBACK":
     case "COMPLAINT":
